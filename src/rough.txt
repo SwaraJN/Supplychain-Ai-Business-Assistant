@@ -1,0 +1,861 @@
+import { useState, useEffect, useRef } from "react";
+
+const NAV_ITEMS = [
+	{ name: "AI Assistance", icon: "✦", gradient: "from-violet-500 to-purple-600" },
+	{ name: "Company Info", icon: "◈", gradient: "from-blue-500 to-cyan-600" },
+	{ name: "Raw Inventory", icon: "▣", gradient: "from-emerald-500 to-teal-600" },
+	{ name: "Inventory Vendor", icon: "◉", gradient: "from-orange-500 to-red-600" },
+	{ name: "Finish Product", icon: "◆", gradient: "from-pink-500 to-rose-600" },
+	{ name: "Orders", icon: "◎", gradient: "from-indigo-500 to-blue-600" },
+	{ name: "Logistics", icon: "⟁", gradient: "from-amber-500 to-yellow-600" },
+	{ name: "Logistics Vendor", icon: "⊞", gradient: "from-slate-500 to-gray-600" },
+];
+
+const INITIAL_MESSAGES = [
+	{
+		id: 1,
+		type: "user",
+		content: "Check inventory for Raw Steel and draft inquiries for the top 3 vendors if we are below 25%.",
+		ts: "9:41 AM",
+	},
+	{
+		id: 2,
+		type: "ai",
+		content: "Inventory scan complete. **Raw Steel is currently at 22%** — below your 25% threshold.\n\nThe Procurement Crew has drafted RFQs for your top 3 vendors based on past delivery performance and current pricing. Ready to dispatch.",
+		ts: "9:41 AM",
+		action: {
+			label: "Drafts Ready",
+			description: "3 RFQs · Vendors A, B & C",
+			buttonText: "Send All",
+			meta: "Avg. lead time: 4 days",
+		},
+	},
+];
+
+const AGENT_FEED = [
+	{ id: 1, time: "Just now", msg: "Inventory Agent scanning Raw Steel stock levels.", status: "active", agent: "INV" },
+	{ id: 2, time: "2 min ago", msg: "Procurement Crew drafted 3 vendor RFQs.", status: "done", agent: "PRO" },
+	{ id: 3, time: "10 min ago", msg: "Email Analyzer processed Vendor A quote response.", status: "done", agent: "EML" },
+	{ id: 4, time: "25 min ago", msg: "Logistics Agent verified optimal shipment routes.", status: "done", agent: "LOG" },
+	{ id: 5, time: "1 hr ago", msg: "Finance Agent updated PO budget forecast.", status: "done", agent: "FIN" },
+];
+
+const STATS = [
+	{ label: "Open POs", value: "14", delta: "+2", up: true },
+	{ label: "Vendors Active", value: "38", delta: "stable", up: null },
+	{ label: "Alerts", value: "3", delta: "critical", up: false },
+];
+
+function AgentBadge({ code, active, darkMode }) {
+	const colors = {
+		INV: "from-emerald-500 to-emerald-600",
+		PRO: "from-blue-500 to-blue-600",
+		EML: "from-violet-500 to-violet-600",
+		LOG: "from-amber-500 to-amber-600",
+		FIN: "from-rose-500 to-rose-600",
+	};
+
+	return (
+		<span
+			className={`
+        inline-flex items-center justify-center 
+        w-8 h-8 rounded-xl
+        text-white text-xs font-bold shrink-0 
+        bg-gradient-to-br ${colors[code] || "from-slate-400 to-slate-500"}
+        ${active ? "shadow-lg shadow-current/30 scale-105" : "opacity-80"}
+        transition-all duration-300 hover:scale-110
+      `}
+		>
+			{code}
+		</span>
+	);
+}
+
+function PulsingDot({ color = "bg-emerald-400" }) {
+	return (
+		<span className="relative inline-flex w-3 h-3">
+			<span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${color} opacity-60`}></span>
+			<span className={`relative inline-flex rounded-full w-3 h-3 ${color} shadow-lg`}></span>
+		</span>
+	);
+}
+
+function ChatMessage({ msg, visible, darkMode }) {
+	const isUser = msg.type === "user";
+
+	return (
+		<div
+			className={`
+        flex ${isUser ? "justify-end" : "justify-start"} 
+        transition-all duration-700 ease-out
+        ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}
+      `}
+		>
+			{!isUser && (
+				<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 flex items-center justify-center text-white text-sm font-bold mr-3 mt-1 shrink-0 shadow-xl shadow-purple-500/30 hover:scale-105 transition-transform duration-300">
+					✦
+				</div>
+			)}
+			<div className={`max-w-[85%] ${isUser ? "max-w-[75%]" : ""}`}>
+				{isUser ? (
+					<div className={`
+            ${darkMode 
+              ? "bg-gradient-to-br from-violet-600 to-purple-700 text-white" 
+              : "bg-gradient-to-br from-slate-800 to-slate-900 text-white"
+            }
+            px-5 py-3.5 rounded-2xl rounded-tr-md text-base leading-relaxed 
+            shadow-xl hover:shadow-2xl transition-all duration-300
+            hover:-translate-y-0.5
+          `}>
+						{msg.content}
+					</div>
+				) : (
+					<div className={`
+            ${darkMode 
+              ? "bg-slate-800/90 border-slate-700" 
+              : "bg-white border-slate-200"
+            }
+            border backdrop-blur-xl rounded-2xl rounded-tl-md overflow-hidden
+            shadow-xl hover:shadow-2xl transition-all duration-300
+            hover:-translate-y-0.5
+          `}>
+						<div className="px-6 py-4">
+							<p
+								className={`text-base ${darkMode ? "text-slate-200" : "text-slate-700"} leading-relaxed`}
+								dangerouslySetInnerHTML={{
+									__html: msg.content.replace(/\*\*(.*?)\*\*/g,
+										`<strong class="${darkMode ? "text-white" : "text-slate-900"} font-semibold">$1</strong>`)
+										.replace(/\n/g, "<br/>")
+								}}
+							/>
+						</div>
+						{msg.action && (
+							<div className={`
+                border-t 
+                ${darkMode 
+                  ? "border-slate-700 bg-gradient-to-r from-slate-800/80 to-violet-900/20" 
+                  : "border-slate-200 bg-gradient-to-r from-slate-50 to-violet-50/40"
+                }
+                px-6 py-4 flex items-center justify-between gap-4
+              `}>
+								<div className="flex items-center gap-3 min-w-0">
+									<span className={`
+                    inline-flex items-center gap-2
+                    ${darkMode 
+                      ? "bg-violet-500/20 text-violet-300 border border-violet-500/30" 
+                      : "bg-violet-100 text-violet-700"
+                    }
+                    text-sm font-bold px-3 py-1.5 rounded-xl whitespace-nowrap
+                    shadow-lg backdrop-blur-sm
+                  `}>
+										<span className={`w-2 h-2 rounded-full ${darkMode ? "bg-violet-400" : "bg-violet-500"} animate-pulse`}></span>
+										{msg.action.label}
+									</span>
+									<div className="min-w-0">
+										<p className={`text-sm font-semibold ${darkMode ? "text-slate-200" : "text-slate-700"} truncate`}>
+											{msg.action.description}
+										</p>
+										<p className={`text-xs ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+											{msg.action.meta}
+										</p>
+									</div>
+								</div>
+								<button className="
+                  shrink-0 
+                  bg-gradient-to-r from-violet-600 to-purple-600 
+                  hover:from-violet-700 hover:to-purple-700
+                  text-white text-sm font-bold 
+                  px-5 py-2.5 rounded-xl 
+                  transition-all duration-300 
+                  hover:shadow-2xl hover:shadow-violet-500/40
+                  hover:-translate-y-0.5 
+                  active:scale-95
+                ">
+									{msg.action.buttonText}
+								</button>
+							</div>
+						)}
+					</div>
+				)}
+				<p className={`
+          text-xs ${darkMode ? "text-slate-500" : "text-slate-400"} 
+          mt-2 ${isUser ? "text-right pr-1" : "pl-1"}
+        `}>
+					{msg.ts}
+				</p>
+			</div>
+		</div>
+	);
+}
+
+export default function SCMDashboard() {
+	const [activeTab, setActiveTab] = useState("AI Assistance");
+	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const [profileOpen, setProfileOpen] = useState(false);
+	const [darkMode, setDarkMode] = useState(false);
+	const [messages, setMessages] = useState(INITIAL_MESSAGES);
+	const [visibleMessages, setVisibleMessages] = useState(new Set());
+	const [inputVal, setInputVal] = useState("");
+	const [isTyping, setIsTyping] = useState(false);
+	const chatEndRef = useRef(null);
+	const profileRef = useRef(null);
+
+	useEffect(() => {
+		messages.forEach((msg, i) => {
+			setTimeout(() => {
+				setVisibleMessages(prev => new Set([...prev, msg.id]));
+			}, i * 300);
+		});
+	}, []);
+
+	useEffect(() => {
+		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages]);
+
+	useEffect(() => {
+		const handler = (e) => {
+			if (profileRef.current && !profileRef.current.contains(e.target)) {
+				setProfileOpen(false);
+			}
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, []);
+
+	const sendMessage = () => {
+		if (!inputVal.trim()) return;
+		const userMsg = {
+			id: Date.now(),
+			type: "user",
+			content: inputVal,
+			ts: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+		};
+		setMessages(prev => [...prev, userMsg]);
+		setVisibleMessages(prev => new Set([...prev, userMsg.id]));
+		setInputVal("");
+		setIsTyping(true);
+
+		setTimeout(() => {
+			const aiResponse = {
+				id: Date.now() + 1,
+				type: "ai",
+				content: "I'm analyzing your request across all autonomous crews. This might take a moment...",
+				ts: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
+			};
+			setMessages(prev => [...prev, aiResponse]);
+			setVisibleMessages(prev => new Set([...prev, aiResponse.id]));
+			setIsTyping(false);
+		}, 2000);
+	};
+
+	return (
+		<div className={`min-h-screen transition-colors duration-500 ${
+			darkMode 
+				? "bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950" 
+				: "bg-gradient-to-br from-slate-50 via-white to-slate-100"
+		}`}>
+			<style>{`
+        @keyframes fadeSlideUp {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .fade-slide-up {
+          animation: fadeSlideUp 0.6s ease-out forwards;
+        }
+        .typing-dot {
+          animation: typingBounce 1.4s infinite;
+        }
+        @keyframes typingBounce {
+          0%, 60%, 100% { transform: translateY(0); }
+          30% { transform: translateY(-8px); }
+        }
+        .scrollbar-thin::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+          background: ${darkMode ? "rgba(148, 163, 184, 0.3)" : "rgba(203, 213, 225, 0.5)"};
+          border-radius: 3px;
+        }
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+          background: ${darkMode ? "rgba(148, 163, 184, 0.5)" : "rgba(148, 163, 184, 0.7)"};
+        }
+        @media (max-width: 768px) {
+          .mobile-menu-enter {
+            animation: slideInLeft 0.3s ease-out;
+          }
+          @keyframes slideInLeft {
+            from {
+              transform: translateX(-100%);
+            }
+            to {
+              transform: translateX(0);
+            }
+          }
+        }
+      `}</style>
+
+			<div className="flex h-screen overflow-hidden">
+				{/* ── MOBILE OVERLAY ── */}
+				{sidebarOpen && (
+					<div
+						className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden transition-opacity duration-300"
+						onClick={() => setSidebarOpen(false)}
+					/>
+				)}
+
+				{/* ── SIDEBAR ── */}
+				<aside className={`
+          ${sidebarOpen ? "translate-x-0 mobile-menu-enter" : "-translate-x-full"} 
+          md:translate-x-0 
+          fixed md:static inset-y-0 left-0 z-50 
+          w-72 lg:w-80 xl:w-[20rem]
+          ${darkMode 
+            ? "bg-slate-900/95 border-slate-800" 
+            : "bg-white/95 border-slate-200"
+          }
+          backdrop-blur-xl border-r 
+          flex flex-col 
+          transition-all duration-300 ease-out
+          shadow-2xl md:shadow-none
+        `}>
+					{/* Logo & Theme Toggle */}
+					<div className={`
+            px-5 lg:px-6 xl:px-7 py-5 lg:py-6 
+            border-b ${darkMode ? "border-slate-800" : "border-slate-200"}
+            flex items-center justify-between
+          `}>
+						<div className="flex items-center gap-3">
+							<div className="w-10 h-10 lg:w-12 lg:h-12 rounded-2xl bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 flex items-center justify-center text-white text-xl lg:text-2xl font-bold shadow-xl shadow-purple-500/30 hover:scale-105 transition-transform duration-300">
+								✦
+							</div>
+							<div>
+								<h2 className={`text-base lg:text-lg xl:text-xl font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>
+									SupplyChain AI
+								</h2>
+								<p className={`text-xs lg:text-sm ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+									Autonomous
+								</p>
+							</div>
+						</div>
+						
+						{/* Theme Toggle */}
+						<button
+							onClick={() => setDarkMode(!darkMode)}
+							className={`
+                p-2.5 lg:p-3 rounded-xl
+                ${darkMode 
+                  ? "bg-slate-800 text-yellow-400 hover:bg-slate-700" 
+                  : "bg-slate-200 text-slate-600 hover:bg-slate-300"
+                }
+                transition-all duration-300 hover:scale-110 active:scale-95
+                shadow-lg
+              `}
+							aria-label="Toggle theme"
+						>
+							{darkMode ? (
+								<svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+									<path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" />
+								</svg>
+							) : (
+								<svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+									<path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+								</svg>
+							)}
+						</button>
+					</div>
+
+					{/* User Profile */}
+					<div className={`
+            px-5 lg:px-6 xl:px-7 py-4 lg:py-5 
+            border-b ${darkMode ? "border-slate-800" : "border-slate-200"}
+          `}>
+						<div className="relative" ref={profileRef}>
+							<button
+								onClick={() => setProfileOpen(!profileOpen)}
+								className={`
+                  w-full flex items-center gap-3 lg:gap-4 
+                  p-3 lg:p-3.5 rounded-xl lg:rounded-2xl
+                  ${darkMode 
+                    ? "bg-slate-800/50 hover:bg-slate-800 border-slate-700" 
+                    : "bg-slate-50 hover:bg-slate-100 border-slate-200"
+                  }
+                  border
+                  transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]
+                  group
+                `}
+							>
+								<div className="w-10 h-10 lg:w-12 lg:h-12 rounded-xl lg:rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white text-base lg:text-lg font-bold shadow-lg group-hover:scale-105 transition-transform duration-300">
+									JD
+								</div>
+								<div className="flex-1 text-left min-w-0">
+									<p className={`text-sm lg:text-base font-bold ${darkMode ? "text-white" : "text-slate-900"} truncate`}>
+										John Doe
+									</p>
+									<p className={`text-xs lg:text-sm ${darkMode ? "text-slate-400" : "text-slate-500"} truncate`}>
+										Supply Chain Manager
+									</p>
+								</div>
+								<svg
+									className={`w-4 h-4 lg:w-5 lg:h-5 ${darkMode ? "text-slate-400" : "text-slate-500"} transition-transform duration-300 ${profileOpen ? "rotate-180" : ""}`}
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+								>
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+								</svg>
+							</button>
+
+							{profileOpen && (
+								<div className={`
+                  absolute top-full left-0 right-0 mt-2 
+                  ${darkMode 
+                    ? "bg-slate-800 border-slate-700" 
+                    : "bg-white border-slate-200"
+                  }
+                  border rounded-xl lg:rounded-2xl
+                  shadow-2xl
+                  overflow-hidden z-50
+                  fade-slide-up
+                `}>
+									{["Profile Settings", "Preferences", "Logout"].map((item, idx) => (
+										<button
+											key={item}
+											className={`
+                        w-full px-4 py-3 text-left text-sm lg:text-base
+                        ${darkMode 
+                          ? "text-slate-200 hover:bg-slate-700" 
+                          : "text-slate-700 hover:bg-slate-50"
+                        }
+                        ${idx !== 2 ? (darkMode ? "border-b border-slate-700" : "border-b border-slate-200") : ""}
+                        transition-colors duration-200
+                      `}
+										>
+											{item}
+										</button>
+									))}
+								</div>
+							)}
+						</div>
+					</div>
+
+					{/* Navigation */}
+					<nav className="flex-1 overflow-y-auto scrollbar-thin px-4 lg:px-5 xl:px-6 py-5 lg:py-6 space-y-2">
+						{NAV_ITEMS.map((item) => {
+							const active = activeTab === item.name;
+							return (
+								<button
+									key={item.name}
+									onClick={() => {
+										setActiveTab(item.name);
+										setSidebarOpen(false);
+									}}
+									className={`
+                    w-full flex items-center gap-3 lg:gap-4 xl:gap-5
+                    px-4 lg:px-5 py-3.5 lg:py-4
+                    rounded-xl lg:rounded-2xl
+                    text-sm lg:text-base xl:text-lg font-semibold
+                    transition-all duration-300
+                    group relative overflow-hidden
+                    ${active
+                      ? `bg-gradient-to-r ${item.gradient} text-white shadow-xl hover:shadow-2xl scale-[1.02]`
+                      : `${darkMode 
+                          ? "text-slate-300 hover:bg-slate-800/50 hover:text-white" 
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                        } hover:scale-[1.01]`
+                    }
+                  `}
+								>
+									{active && (
+										<span className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+									)}
+									<span className={`
+                    text-xl lg:text-2xl xl:text-3xl w-6 lg:w-7 xl:w-8 text-center 
+                    transition-transform duration-300 
+                    ${active ? "" : "group-hover:scale-125"}
+                  `}>
+										{item.icon}
+									</span>
+									<span className="relative z-10">{item.name}</span>
+									{active && (
+										<span className="ml-auto w-2 h-2 rounded-full bg-white/70 shadow-lg animate-pulse" />
+									)}
+								</button>
+							);
+						})}
+					</nav>
+
+					{/* Pro Tip */}
+					<div className="px-4 lg:px-5 xl:px-6 py-4 lg:py-5 border-t ${darkMode ? 'border-slate-800' : 'border-slate-200'}">
+						<div className={`
+              ${darkMode 
+                ? "bg-gradient-to-br from-violet-900/50 to-purple-900/50 border-violet-700/50" 
+                : "bg-gradient-to-br from-violet-50 to-purple-50 border-violet-200"
+              }
+              border rounded-xl lg:rounded-2xl p-4 lg:p-5
+              backdrop-blur-xl
+              hover:scale-[1.02] transition-transform duration-300
+            `}>
+							<div className="flex items-center gap-2 mb-2">
+								<span className="text-base lg:text-lg">✦</span>
+								<p className={`text-xs lg:text-sm font-bold ${darkMode ? "text-violet-300" : "text-violet-900"}`}>
+									Pro Tip
+								</p>
+							</div>
+							<p className={`text-xs lg:text-sm ${darkMode ? "text-violet-200" : "text-violet-700"} leading-relaxed`}>
+								Use natural language to trigger multi-agent workflows across your supply chain.
+							</p>
+						</div>
+					</div>
+				</aside>
+
+				{/* ── MAIN CONTENT ── */}
+				<div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+					{/* ── HEADER ── */}
+					<header className={`
+            ${darkMode 
+              ? "bg-slate-900/95 border-slate-800" 
+              : "bg-white/95 border-slate-200"
+            }
+            backdrop-blur-xl border-b 
+            px-4 lg:px-6 xl:px-8 py-4 lg:py-5
+            flex items-center justify-between
+            shadow-lg
+            z-30
+          `}>
+						<div className="flex items-center gap-3 lg:gap-4">
+							<button
+								onClick={() => setSidebarOpen(true)}
+								className={`
+                  md:hidden p-2.5 rounded-xl
+                  ${darkMode 
+                    ? "text-slate-300 hover:bg-slate-800" 
+                    : "text-slate-700 hover:bg-slate-100"
+                  }
+                  transition-all duration-200 hover:scale-110 active:scale-95
+                `}
+							>
+								<svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+								</svg>
+							</button>
+							
+							<div>
+								<h2 className={`text-xl lg:text-2xl xl:text-3xl font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>
+									{activeTab}
+								</h2>
+								<p className={`text-xs lg:text-sm ${darkMode ? "text-slate-400" : "text-slate-500"} mt-0.5`}>
+									Autonomous operations dashboard
+								</p>
+							</div>
+						</div>
+
+						<div className="flex items-center gap-2 lg:gap-3">
+							<button className={`
+                p-2.5 lg:p-3 rounded-xl
+                ${darkMode 
+                  ? "text-slate-300 hover:bg-slate-800" 
+                  : "text-slate-700 hover:bg-slate-100"
+                }
+                transition-all duration-200 hover:scale-110 active:scale-95
+                relative
+              `}>
+								<svg className="w-5 h-5 lg:w-6 lg:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+								</svg>
+								<span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-current animate-pulse" />
+							</button>
+						</div>
+					</header>
+
+					{/* ── MAIN CONTENT AREA ── */}
+					<main className="flex-1 overflow-y-auto scrollbar-thin p-4 lg:p-6 xl:p-8">
+						{activeTab === "AI Assistance" ? (
+							<div className="h-full grid grid-cols-1 xl:grid-cols-4 gap-4 lg:gap-5 xl:gap-6" style={{ minHeight: "calc(100vh - 140px)" }}>
+								
+								{/* ── CHAT (col-span-3) ── */}
+								<div className="xl:col-span-3 ${darkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-white border-slate-200'} backdrop-blur-xl border rounded-2xl xl:rounded-3xl shadow-2xl flex flex-col overflow-hidden" style={{ minHeight: "600px" }}>
+									{/* Chat Header */}
+									<div className={`
+                    px-5 lg:px-6 xl:px-7 py-4 lg:py-5
+                    border-b ${darkMode ? "border-slate-700" : "border-slate-200"}
+                    flex items-center justify-between shrink-0
+                  `}>
+										<div className="flex items-center gap-3 lg:gap-4">
+											<div className="w-11 h-11 lg:w-12 lg:h-12 rounded-2xl bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 flex items-center justify-center text-white text-lg lg:text-xl font-bold shadow-xl shadow-purple-500/30 hover:scale-105 transition-transform duration-300">
+												✦
+											</div>
+											<div>
+												<p className={`text-base lg:text-lg font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>
+													Autonomous Business Assistant
+												</p>
+												<div className="flex items-center gap-2 mt-1">
+													<PulsingDot color={darkMode ? "bg-emerald-400" : "bg-emerald-500"} />
+													<span className={`text-xs lg:text-sm font-medium ${darkMode ? "text-emerald-400" : "text-emerald-600"}`}>
+														Connected · 3 CrewAI Agents
+													</span>
+												</div>
+											</div>
+										</div>
+										<button className={`
+                      p-2.5 rounded-xl
+                      ${darkMode 
+                        ? "text-slate-400 hover:text-slate-200 hover:bg-slate-700" 
+                        : "text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+                      }
+                      transition-all duration-200 hover:scale-110 active:scale-95
+                    `}>
+											<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+												<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01" />
+											</svg>
+										</button>
+									</div>
+
+									{/* Messages */}
+									<div className={`
+                    flex-1 overflow-y-auto scrollbar-thin 
+                    p-5 lg:p-6 xl:p-7 space-y-5 lg:space-y-6
+                    ${darkMode ? "bg-slate-900/30" : "bg-slate-50/50"}
+                  `}>
+										{messages.map((msg) => (
+											<ChatMessage key={msg.id} msg={msg} visible={visibleMessages.has(msg.id)} darkMode={darkMode} />
+										))}
+										{isTyping && (
+											<div className="flex items-center gap-3 lg:gap-4 fade-slide-up">
+												<div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 flex items-center justify-center text-white text-sm font-bold shrink-0 shadow-xl shadow-purple-500/30">
+													✦
+												</div>
+												<div className={`
+                          ${darkMode 
+                            ? "bg-slate-800/90 border-slate-700" 
+                            : "bg-white border-slate-200"
+                          }
+                          border backdrop-blur-xl rounded-2xl rounded-tl-md 
+                          px-5 py-3.5 flex items-center gap-2
+                          shadow-xl
+                        `}>
+													{[0,1,2].map(i => (
+														<span 
+															key={i} 
+															className={`typing-dot w-2.5 h-2.5 rounded-full ${darkMode ? "bg-violet-400" : "bg-violet-500"}`} 
+															style={{animationDelay:`${i*0.2}s`}}
+														/>
+													))}
+												</div>
+											</div>
+										)}
+										<div ref={chatEndRef} />
+									</div>
+
+									{/* Input */}
+									<div className={`
+                    p-4 lg:p-5 xl:p-6
+                    border-t ${darkMode ? "border-slate-700" : "border-slate-200"}
+                    ${darkMode ? "bg-slate-800/50" : "bg-white"}
+                    shrink-0
+                  `}>
+										<div className={`
+                      flex items-center gap-3
+                      ${darkMode 
+                        ? "bg-slate-900/50 border-slate-700 focus-within:border-violet-500" 
+                        : "bg-slate-50 border-slate-300 focus-within:border-violet-400"
+                      }
+                      border rounded-xl lg:rounded-2xl
+                      px-4 lg:px-5 py-3 lg:py-3.5
+                      focus-within:ring-4 focus-within:ring-violet-500/20
+                      transition-all duration-300
+                      shadow-lg
+                    `}>
+											<span className={`text-xl ${darkMode ? "text-slate-500" : "text-slate-400"} shrink-0`}>✦</span>
+											<input
+												type="text"
+												value={inputVal}
+												onChange={e => setInputVal(e.target.value)}
+												onKeyDown={e => e.key === "Enter" && sendMessage()}
+												placeholder="Ask agents to check stock, draft POs, analyze vendors..."
+												className={`
+                          flex-1 bg-transparent 
+                          text-base lg:text-lg
+                          ${darkMode ? "text-white placeholder:text-slate-500" : "text-slate-800 placeholder:text-slate-400"}
+                          outline-none
+                        `}
+											/>
+											<button 
+												onClick={sendMessage} 
+												disabled={!inputVal.trim()}
+												className="
+                          shrink-0 w-10 h-10 lg:w-11 lg:h-11
+                          bg-gradient-to-r from-violet-600 to-purple-600
+                          hover:from-violet-700 hover:to-purple-700
+                          disabled:from-slate-300 disabled:to-slate-400
+                          text-white rounded-xl lg:rounded-2xl
+                          flex items-center justify-center
+                          transition-all duration-300
+                          hover:shadow-2xl hover:shadow-violet-500/40
+                          hover:scale-110 active:scale-95
+                          disabled:cursor-not-allowed disabled:hover:scale-100
+                        "
+											>
+												<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 12h14M12 5l7 7-7 7" />
+												</svg>
+											</button>
+										</div>
+										<p className={`text-center text-xs lg:text-sm ${darkMode ? "text-slate-500" : "text-slate-400"} mt-3`}>
+											AI agents may make errors. Always verify critical supply chain decisions.
+										</p>
+									</div>
+								</div>
+
+								{/* ── RIGHT COLUMN ── */}
+								<div className="xl:col-span-1 flex flex-col gap-4 lg:gap-5">
+									
+									{/* Stats Row */}
+									<div className="grid grid-cols-3 xl:grid-cols-1 gap-3 lg:gap-4">
+										{STATS.map((s, idx) => (
+											<div 
+												key={s.label} 
+												className={`
+                          ${darkMode 
+                            ? "bg-slate-800/50 border-slate-700" 
+                            : "bg-white border-slate-200"
+                          }
+                          backdrop-blur-xl border rounded-xl lg:rounded-2xl 
+                          p-4 lg:p-5 
+                          shadow-xl hover:shadow-2xl 
+                          transition-all duration-300 
+                          hover:-translate-y-1 hover:scale-[1.02]
+                          cursor-pointer
+                          fade-slide-up
+                        `}
+												style={{animationDelay: `${idx * 0.1}s`}}
+											>
+												<p className={`text-xs font-bold ${darkMode ? "text-slate-400" : "text-slate-500"} uppercase tracking-wider mb-2`}>
+													{s.label}
+												</p>
+												<div className="flex items-end justify-between">
+													<p className={`text-3xl lg:text-4xl font-bold ${darkMode ? "text-white" : "text-slate-900"}`}>
+														{s.value}
+													</p>
+													<span className={`
+                            text-xs font-bold px-2.5 py-1 rounded-full
+                            ${s.up === true 
+                              ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" 
+                              : s.up === false 
+                                ? "bg-rose-500/20 text-rose-400 border border-rose-500/30" 
+                                : "bg-slate-500/20 text-slate-400 border border-slate-500/30"
+                            }
+                          `}>
+														{s.delta}
+													</span>
+												</div>
+											</div>
+										))}
+									</div>
+
+									{/* Agent Pulse */}
+									<div className={`
+                    ${darkMode 
+                      ? "bg-slate-800/50 border-slate-700" 
+                      : "bg-white border-slate-200"
+                    }
+                    backdrop-blur-xl border rounded-xl lg:rounded-2xl 
+                    shadow-xl p-5 lg:p-6 flex-1
+                    hover:shadow-2xl transition-shadow duration-300
+                  `}>
+										<div className="flex items-center justify-between mb-5">
+											<p className={`text-sm font-bold ${darkMode ? "text-white" : "text-slate-900"} uppercase tracking-wider`}>
+												Live Agent Pulse
+											</p>
+											<PulsingDot color={darkMode ? "bg-emerald-400" : "bg-emerald-500"} />
+										</div>
+										<div className="relative space-y-5">
+											<div className={`absolute left-4 top-0 bottom-0 w-px bg-gradient-to-b ${darkMode ? "from-emerald-500/30 via-slate-700 to-transparent" : "from-emerald-300 via-slate-300 to-transparent"}`} />
+											{AGENT_FEED.map((item, i) => (
+												<div 
+													key={item.id} 
+													className="relative pl-12 fade-slide-up" 
+													style={{ animationDelay: `${i * 0.1}s` }}
+												>
+													<div className="absolute left-0 top-0.5">
+														<AgentBadge code={item.agent} active={item.status === "active"} darkMode={darkMode} />
+													</div>
+													<p className={`text-xs ${darkMode ? "text-slate-500" : "text-slate-400"} font-medium mb-1`}>
+														{item.time}
+													</p>
+													<p className={`text-sm ${darkMode ? "text-slate-300" : "text-slate-700"} leading-relaxed`}>
+														{item.msg}
+													</p>
+												</div>
+											))}
+										</div>
+									</div>
+
+									{/* Pending Approvals */}
+									<div className="bg-gradient-to-br from-violet-600 via-purple-600 to-indigo-700 rounded-xl lg:rounded-2xl p-5 lg:p-6 shadow-2xl shadow-violet-500/30 hover:shadow-violet-500/50 transition-shadow duration-300">
+										<p className="text-xs font-bold text-violet-200 uppercase tracking-widest mb-2">
+											Pending Approvals
+										</p>
+										<p className="text-5xl lg:text-6xl font-bold text-white mb-5">
+											2
+										</p>
+										<div className="space-y-3 mb-5">
+											{["PO #4821 · Vendor A · $12,400", "PO #4822 · Vendor B · $8,700"].map(item => (
+												<div key={item} className="flex items-center gap-2.5 text-sm text-violet-100">
+													<span className="w-2 h-2 rounded-full bg-amber-400 shrink-0 shadow-lg shadow-amber-400/50 animate-pulse" />
+													{item}
+												</div>
+											))}
+										</div>
+										<button className="
+                      w-full 
+                      bg-white/20 hover:bg-white/30
+                      backdrop-blur-sm
+                      text-white text-sm font-semibold 
+                      py-3 rounded-xl lg:rounded-2xl
+                      border border-white/20 hover:border-white/40
+                      transition-all duration-300 
+                      hover:shadow-2xl hover:-translate-y-0.5
+                      active:scale-95
+                    ">
+											Review Actions →
+										</button>
+									</div>
+								</div>
+							</div>
+						) : (
+							<div className="flex-1 flex items-center justify-center p-4 lg:p-6 min-h-[600px]">
+								<div className="text-center max-w-md fade-slide-up">
+									<div className={`
+                    w-20 h-20 lg:w-24 lg:h-24
+                    ${darkMode ? "bg-slate-800" : "bg-slate-100"}
+                    rounded-3xl flex items-center justify-center 
+                    text-4xl lg:text-5xl mx-auto mb-5
+                    shadow-2xl hover:scale-110 transition-transform duration-300
+                  `}>
+										🛠
+									</div>
+									<h2 className={`text-2xl lg:text-3xl font-bold ${darkMode ? "text-white" : "text-slate-800"} mb-3`}>
+										{activeTab}
+									</h2>
+									<p className={`${darkMode ? "text-slate-400" : "text-slate-500"} text-base lg:text-lg`}>
+										This module is under construction. Check back soon.
+									</p>
+								</div>
+							</div>
+						)}
+					</main>
+				</div>
+			</div>
+		</div>
+	);
+}
